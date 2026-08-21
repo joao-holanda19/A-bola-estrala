@@ -1,0 +1,19 @@
+{
+  "name": "a-bola-estrala",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Steam & Spurs — Arcade Sports Steampunk Western",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "^3.87.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
