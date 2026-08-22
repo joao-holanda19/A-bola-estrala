@@ -1,12 +1,13 @@
 // ============================================================
 // A Bola Estrala — Game Scene
-// Main gameplay: arena, vehicles, ball, goals, HUD
+// Main gameplay: arena, vehicles, TNT ball, goals, steam geysers, HUD
 // ============================================================
 import Phaser from 'phaser';
 import { GAME, PHYSICS, ARENA, COLORS, CATEGORIES } from '../config';
 import { Vehicle } from '../entities/Vehicle';
 import { Ball } from '../entities/Ball';
 import { Goal } from '../entities/Goal';
+import { SteamGeyser } from '../entities/SteamGeyser';
 import { InputManager } from '../systems/InputManager';
 
 export class GameScene extends Phaser.Scene {
@@ -15,6 +16,7 @@ export class GameScene extends Phaser.Scene {
   private ball!: Ball;
   public goalLeft!: Goal;
   public goalRight!: Goal;
+  private geysers: SteamGeyser[] = [];
   private inputManager!: InputManager;
 
   // HUD
@@ -35,9 +37,13 @@ export class GameScene extends Phaser.Scene {
     this.score = [0, 0];
     this.matchTimer = 0;
     this.matchPaused = false;
+    this.geysers = [];
 
     // --- Build the arena ---
     this.createArena();
+
+    // --- Create steam geysers ---
+    this.createGeysers();
 
     // --- Create goals ---
     this.goalLeft = new Goal(this, 0);
@@ -65,8 +71,8 @@ export class GameScene extends Phaser.Scene {
     // --- HUD ---
     this.createHUD();
 
-    // --- Goal detection ---
-    this.setupGoalDetection();
+    // --- Collision & Event detection ---
+    this.setupCollisionHandling();
 
     // --- Arena dust particles ---
     this.setupDustParticles();
@@ -92,6 +98,11 @@ export class GameScene extends Phaser.Scene {
     // Update ball
     this.ball.update();
 
+    // Update geysers cooldown
+    for (const geyser of this.geysers) {
+      geyser.update(delta);
+    }
+
     // Dust trail from vehicles
     this.emitVehicleDust(this.vehicle1);
     this.emitVehicleDust(this.vehicle2);
@@ -108,62 +119,81 @@ export class GameScene extends Phaser.Scene {
     const goalH = ARENA.GOAL_HEIGHT;
     const goalY = ARENA.GOAL_Y;
 
-    // Floor (visual only — sandy desert color)
+    // Floor base
     this.add.rectangle(w / 2, h / 2, w, h, COLORS.SAND).setDepth(0);
 
+    // Dust field grid/lines for western arena look
+    const gfx = this.add.graphics();
+    gfx.lineStyle(1, COLORS.BURNT_WOOD, 0.15);
+    for (let x = 60; x < w; x += 60) {
+      gfx.moveTo(x, 0);
+      gfx.lineTo(x, h);
+    }
+    for (let y = 60; y < h; y += 60) {
+      gfx.moveTo(0, y);
+      gfx.lineTo(w, y);
+    }
+    gfx.strokePath();
+    gfx.setDepth(1);
+
     // Midfield line
-    this.add.rectangle(w / 2, h / 2, 3, h - t * 2, COLORS.DUST).setAlpha(0.4).setDepth(1);
+    this.add.rectangle(w / 2, h / 2, 4, h - t * 2, COLORS.DUST).setAlpha(0.4).setDepth(1);
 
     // Center circle
-    const centerCircle = this.add.circle(w / 2, h / 2, 70);
+    const centerCircle = this.add.circle(w / 2, h / 2, 80);
     centerCircle.setStrokeStyle(3, COLORS.DUST);
     centerCircle.setAlpha(0.3);
     centerCircle.setDepth(1);
 
+    // Center gold star/spur
+    const star = this.add.text(w / 2, h / 2, '★', {
+      fontFamily: 'monospace',
+      fontSize: '28px',
+      color: '#ffd700',
+    }).setOrigin(0.5).setAlpha(0.3).setDepth(1);
+    star.rotation = 0.2;
+
     // --- Walls with gaps for goals ---
-
-    // Top wall (full width)
+    // Top wall
     this.createWall(w / 2, t / 2, w, t);
-
-    // Bottom wall (full width)
+    // Bottom wall
     this.createWall(w / 2, h - t / 2, w, t);
 
-    // Left side walls (with goal gap in the middle)
+    // Left side walls (with goal gap)
     const sideHeight = (h - goalH) / 2 - t;
-    // Top-left segment
     this.createWall(t / 2, t + sideHeight / 2, t, sideHeight);
-    // Bottom-left segment
     this.createWall(t / 2, h - t - sideHeight / 2, t, sideHeight);
 
-    // Right side walls (with goal gap in the middle)
-    // Top-right segment
+    // Right side walls (with goal gap)
     this.createWall(w - t / 2, t + sideHeight / 2, t, sideHeight);
-    // Bottom-right segment
     this.createWall(w - t / 2, h - t - sideHeight / 2, t, sideHeight);
 
-    // Back walls behind goals (to stop the ball from going off-screen)
-    // Left goal back wall — not needed because goal sensor is there
-    // We add thin bouncers behind goals to push the ball back
-    this.createWall(-5, goalY, 10, goalH); // left back
-    this.createWall(w + 5, goalY, 10, goalH); // right back
+    // Back walls behind goals
+    this.createWall(-5, goalY, 10, goalH);
+    this.createWall(w + 5, goalY, 10, goalH);
   }
 
   private createWall(x: number, y: number, width: number, height: number): void {
-    // Visual
     const wallRect = this.add.rectangle(x, y, width, height, COLORS.DARK_WOOD);
-    wallRect.setStrokeStyle(1, COLORS.BURNT_WOOD);
+    wallRect.setStrokeStyle(2, COLORS.BURNT_WOOD);
     wallRect.setDepth(8);
 
-    // Physics — static body
     this.matter.add.rectangle(x, y, width, height, {
       isStatic: true,
-      restitution: 0.5,
-      friction: 0.3,
+      restitution: 0.6,
+      friction: 0.2,
       collisionFilter: {
         category: CATEGORIES.WALL,
         mask: CATEGORIES.VEHICLE | CATEGORIES.BALL,
       },
       label: 'wall',
+    });
+  }
+
+  private createGeysers(): void {
+    ARENA.GEYSER_POSITIONS.forEach((pos, index) => {
+      const geyser = new SteamGeyser(this, pos.x, pos.y, index);
+      this.geysers.push(geyser);
     });
   }
 
@@ -178,22 +208,23 @@ export class GameScene extends Phaser.Scene {
       'P1  0 — 0  P2',
       {
         fontFamily: 'monospace',
-        fontSize: '28px',
+        fontSize: '30px',
         color: '#f5e6c8',
         fontStyle: 'bold',
         stroke: '#3e2723',
-        strokeThickness: 4,
+        strokeThickness: 5,
       },
     ).setOrigin(0.5, 0).setDepth(100).setScrollFactor(0);
 
     // Timer display
     this.timerText = this.add.text(
-      GAME.WIDTH / 2, 50,
+      GAME.WIDTH / 2, 54,
       '3:00',
       {
         fontFamily: 'monospace',
         fontSize: '20px',
         color: '#d4a574',
+        fontStyle: 'bold',
         stroke: '#3e2723',
         strokeThickness: 3,
       },
@@ -201,27 +232,27 @@ export class GameScene extends Phaser.Scene {
 
     // Controls hint
     this.add.text(
-      GAME.WIDTH / 2, GAME.HEIGHT - 20,
-      'P1: WASD + Shift(boost) J(salto) K(drift)   |   P2: Setas + Num0(boost) Num1(salto) Num2(drift)',
+      GAME.WIDTH / 2, GAME.HEIGHT - 16,
+      'P1: WASD + Shift(Boost) J(Salto) K(Drift)   |   P2: Setas + Num0(Boost) Num1(Salto) Num2(Drift)',
       {
         fontFamily: 'monospace',
-        fontSize: '11px',
+        fontSize: '12px',
         color: '#b87333',
       },
-    ).setOrigin(0.5, 1).setDepth(100).setScrollFactor(0).setAlpha(0.7);
+    ).setOrigin(0.5, 1).setDepth(100).setScrollFactor(0).setAlpha(0.85);
 
     // Player labels near boost bars
-    this.add.text(16, 8, 'P1', {
+    this.add.text(20, 8, 'P1 VAPOR', {
       fontFamily: 'monospace',
-      fontSize: '12px',
+      fontSize: '11px',
       color: '#e85d3a',
       fontStyle: 'bold',
     }).setDepth(100).setScrollFactor(0);
 
-    this.add.text(GAME.WIDTH - 30, 8, 'P2', {
+    this.add.text(GAME.WIDTH - 90, 8, 'P2 VAPOR', {
       fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#3a7ec8',
+      fontSize: '11px',
+      color: '#ffd700',
       fontStyle: 'bold',
     }).setDepth(100).setScrollFactor(0);
   }
@@ -248,20 +279,37 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ========================
-  // Goal Detection
+  // Collision Handling
   // ========================
 
-  private setupGoalDetection(): void {
+  private setupCollisionHandling(): void {
     this.matter.world.on('collisionstart', (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
       for (const pair of event.pairs) {
-        const labels = [pair.bodyA.label, pair.bodyB.label];
+        const labelA = pair.bodyA.label || '';
+        const labelB = pair.bodyB.label || '';
+        const labels = [labelA, labelB];
 
-        // Check if ball collided with a goal sensor
+        // 1. Goal Detection
         if (labels.includes('ball') && labels.some(l => l.startsWith('goal-'))) {
           const goalLabel = labels.find(l => l.startsWith('goal-'))!;
           const goalTeamId = parseInt(goalLabel.split('-')[1], 10);
-
           this.onGoalScored(goalTeamId);
+        }
+
+        // 2. Geyser Boost Recharge Detection
+        if (labels.some(l => l.startsWith('geyser-')) && labels.some(l => l.startsWith('vehicle-p'))) {
+          const geyserLabel = labels.find(l => l.startsWith('geyser-'))!;
+          const vehicleLabel = labels.find(l => l.startsWith('vehicle-p'))!;
+
+          const geyserId = parseInt(geyserLabel.split('-')[1], 10);
+          const vehicleId = parseInt(vehicleLabel.split('-p')[1], 10);
+
+          const targetGeyser = this.geysers[geyserId];
+          const targetVehicle = vehicleId === 0 ? this.vehicle1 : this.vehicle2;
+
+          if (targetGeyser && targetVehicle) {
+            targetGeyser.trigger(targetVehicle);
+          }
         }
       }
     });
@@ -270,56 +318,51 @@ export class GameScene extends Phaser.Scene {
   private onGoalScored(goalTeamId: number): void {
     if (this.matchPaused) return;
 
-    // goalTeamId 0 = left goal → Player 2 scores (P2 attacked left)
-    // goalTeamId 1 = right goal → Player 1 scores (P1 attacked right)
-    // Wait — actually: P1 starts on the left, P2 on the right.
-    // P1 wants to score in the RIGHT goal (goal-1), P2 wants to score in the LEFT goal (goal-0).
-    // So: ball entering goal-0 → P2 scores; ball entering goal-1 → P1 scores.
-    // But that means P1's "own" goal is goal-0 (left) and P2's own goal is goal-1 (right).
-    // Actually the convention: each team DEFENDS a goal.
-    // P1 defends LEFT (goal-0), P2 defends RIGHT (goal-1).
-    // If ball enters goal-0 (left), P2 scored! If ball enters goal-1 (right), P1 scored!
-
     if (goalTeamId === 0) {
-      // Ball entered left goal → P2 scored
       this.score[1]++;
     } else {
-      // Ball entered right goal → P1 scored
       this.score[0]++;
     }
 
     this.updateScoreDisplay();
     this.matchPaused = true;
 
-    // Goal celebration: camera shake + flash
-    this.cameras.main.shake(300, 0.01);
-    this.cameras.main.flash(200, 255, 215, 0);
+    // Goal celebration
+    this.cameras.main.shake(350, 0.015);
+    this.cameras.main.flash(250, 255, 215, 0);
 
-    // GOOOL text
+    const goalBanner = this.add.rectangle(
+      GAME.WIDTH / 2, GAME.HEIGHT / 2,
+      GAME.WIDTH, 120,
+      0x1a0e07, 0.75,
+    ).setDepth(199);
+
     const goalText = this.add.text(
       GAME.WIDTH / 2, GAME.HEIGHT / 2,
-      'GOOOL!',
+      '★ GOOOL! ★',
       {
         fontFamily: 'monospace',
-        fontSize: '64px',
+        fontSize: '60px',
         color: '#ffd700',
         fontStyle: 'bold',
-        stroke: '#3e2723',
-        strokeThickness: 6,
+        stroke: '#8b4513',
+        strokeThickness: 7,
       },
     ).setOrigin(0.5).setDepth(200);
 
-    // Animate goal text
     this.tweens.add({
-      targets: goalText,
-      scale: { from: 0.5, to: 1.5 },
+      targets: [goalText, goalBanner],
+      scaleX: { from: 0.6, to: 1.1 },
+      scaleY: { from: 0.6, to: 1.1 },
       alpha: { from: 1, to: 0 },
-      duration: 1500,
+      duration: 1800,
       ease: 'Back.easeOut',
-      onComplete: () => goalText.destroy(),
+      onComplete: () => {
+        goalText.destroy();
+        goalBanner.destroy();
+      },
     });
 
-    // Reset positions after pause
     this.time.delayedCall(2000, () => {
       this.resetPositions();
       this.matchPaused = false;
@@ -348,11 +391,10 @@ export class GameScene extends Phaser.Scene {
     this.matchPaused = true;
 
     const winner =
-      this.score[0] > this.score[1] ? 'JOGADOR 1 VENCE!'
-        : this.score[1] > this.score[0] ? 'JOGADOR 2 VENCE!'
-          : 'EMPATE!';
+      this.score[0] > this.score[1] ? 'JOGADOR 1 VENCEU!'
+        : this.score[1] > this.score[0] ? 'JOGADOR 2 VENCEU!'
+          : 'EMPATE NO FAROESTE!';
 
-    // Overlay
     const overlay = this.add.rectangle(
       GAME.WIDTH / 2, GAME.HEIGHT / 2,
       GAME.WIDTH, GAME.HEIGHT,
@@ -361,13 +403,12 @@ export class GameScene extends Phaser.Scene {
 
     this.tweens.add({
       targets: overlay,
-      alpha: 0.6,
-      duration: 800,
+      alpha: 0.7,
+      duration: 700,
     });
 
-    // Result text
     const resultText = this.add.text(
-      GAME.WIDTH / 2, GAME.HEIGHT / 2 - 40,
+      GAME.WIDTH / 2, GAME.HEIGHT / 2 - 50,
       'FIM DE JOGO',
       {
         fontFamily: 'monospace',
@@ -380,7 +421,7 @@ export class GameScene extends Phaser.Scene {
     ).setOrigin(0.5).setDepth(301).setAlpha(0);
 
     const winnerText = this.add.text(
-      GAME.WIDTH / 2, GAME.HEIGHT / 2 + 20,
+      GAME.WIDTH / 2, GAME.HEIGHT / 2 + 15,
       winner,
       {
         fontFamily: 'monospace',
@@ -397,7 +438,7 @@ export class GameScene extends Phaser.Scene {
       `${this.score[0]} — ${this.score[1]}`,
       {
         fontFamily: 'monospace',
-        fontSize: '40px',
+        fontSize: '42px',
         color: '#d4a574',
         fontStyle: 'bold',
         stroke: '#3e2723',
@@ -412,44 +453,35 @@ export class GameScene extends Phaser.Scene {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#b87333',
+        backgroundColor: '#1f140e',
+        padding: { x: 12, y: 6 },
       },
     ).setOrigin(0.5).setDepth(301).setAlpha(0);
 
-    // Animate in
     this.tweens.add({
       targets: [resultText, winnerText, scoreResult, restartText],
       alpha: 1,
       duration: 600,
-      delay: 500,
+      delay: 400,
     });
 
-    // Restart on ENTER
     this.input.keyboard!.once('keydown-ENTER', () => {
       this.scene.restart();
     });
   }
 
   // ========================
-  // Visual Effects
+  // Visual Effects & Details
   // ========================
 
   private setupDustParticles(): void {
-    // Create dust particle texture if not already created
-    if (!this.textures.exists('dust-particle')) {
-      const gfx = this.add.graphics();
-      gfx.fillStyle(COLORS.DUST, 0.5);
-      gfx.fillCircle(3, 3, 3);
-      gfx.generateTexture('dust-particle', 6, 6);
-      gfx.destroy();
-    }
-
     this.dustEmitter = this.add.particles(0, 0, 'dust-particle', {
-      speed: { min: 10, max: 40 },
-      lifespan: 500,
+      speed: { min: 10, max: 35 },
+      lifespan: 400,
       scale: { start: 0.8, end: 0 },
-      alpha: { start: 0.4, end: 0 },
+      alpha: { start: 0.35, end: 0 },
       emitting: false,
-      quantity: 2,
+      quantity: 1,
     });
     this.dustEmitter.setDepth(3);
   }
@@ -457,41 +489,31 @@ export class GameScene extends Phaser.Scene {
   private emitVehicleDust(vehicle: Vehicle): void {
     const body = vehicle.body;
     const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2);
-    if (speed > 2 && this.dustEmitter) {
+    if (speed > 2.5 && this.dustEmitter) {
       this.dustEmitter.emitParticleAt(body.position.x, body.position.y, 1);
     }
   }
 
-  // ========================
-  // Arena Decorations
-  // ========================
-
   private createArenaDecorations(): void {
-    // Simple cactus-like decorations outside the play area
-
-    // Corner decorations — small circles to represent cacti/rocks
-    const corners = [
-      { x: 50, y: 50 },
-      { x: GAME.WIDTH - 50, y: 50 },
-      { x: 50, y: GAME.HEIGHT - 50 },
-      { x: GAME.WIDTH - 50, y: GAME.HEIGHT - 50 },
+    // Saguaro Cacti outside corners
+    const cactiPositions = [
+      { x: 50, y: 55 },
+      { x: GAME.WIDTH - 50, y: 55 },
+      { x: 50, y: GAME.HEIGHT - 55 },
+      { x: GAME.WIDTH - 50, y: GAME.HEIGHT - 55 },
     ];
 
-    for (const pos of corners) {
-      // Small cactus-like shape
-      const cactus = this.add.circle(pos.x, pos.y, 8, 0x2d5a27);
-      cactus.setStrokeStyle(1, 0x1a3d18);
-      cactus.setAlpha(0.6);
-      cactus.setDepth(2);
+    for (const pos of cactiPositions) {
+      this.add.image(pos.x, pos.y, 'cactus').setDepth(2).setAlpha(0.85);
     }
 
-    // Railroad track lines near top and bottom
-    for (let x = 60; x < GAME.WIDTH - 60; x += 40) {
-      const tie = this.add.rectangle(x, 5, 12, 4, COLORS.DARK_WOOD);
-      tie.setAlpha(0.3).setDepth(1);
+    // Railroad track sleepers on top and bottom walls
+    for (let x = 60; x < GAME.WIDTH - 60; x += 36) {
+      const tie1 = this.add.rectangle(x, 6, 10, 4, COLORS.DARK_WOOD);
+      tie1.setAlpha(0.4).setDepth(2);
 
-      const tie2 = this.add.rectangle(x, GAME.HEIGHT - 5, 12, 4, COLORS.DARK_WOOD);
-      tie2.setAlpha(0.3).setDepth(1);
+      const tie2 = this.add.rectangle(x, GAME.HEIGHT - 6, 10, 4, COLORS.DARK_WOOD);
+      tie2.setAlpha(0.4).setDepth(2);
     }
   }
 }

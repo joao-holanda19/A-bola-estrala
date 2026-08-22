@@ -1,6 +1,6 @@
 // ============================================================
 // A Bola Estrala — Vehicle Entity
-// Steam-powered carriage with boost, jump, and drift mechanics
+// Steam-powered carriage with boost, jump, drift, and exhaust particles
 // ============================================================
 import Phaser from 'phaser';
 import { PHYSICS, CATEGORIES, COLORS } from '../config';
@@ -9,7 +9,7 @@ import { clamp, getSpeed, angleToVector, dot } from '../utils/MathHelpers';
 
 export class Vehicle {
   public body: MatterJS.BodyType;
-  public sprite: Phaser.GameObjects.Rectangle;
+  public sprite: Phaser.Physics.Matter.Sprite;
   public boostPressure: number = PHYSICS.BOOST_MAX;
   public playerId: number;
 
@@ -19,10 +19,11 @@ export class Vehicle {
   private isDrifting: boolean = false;
   private boostBarBg: Phaser.GameObjects.Rectangle;
   private boostBarFill: Phaser.GameObjects.Rectangle;
+  private boostEmitter: Phaser.GameObjects.Particles.ParticleEmitter;
 
   // Vehicle dimensions
-  private static readonly WIDTH = 52;
-  private static readonly HEIGHT = 30;
+  public static readonly WIDTH = 56;
+  public static readonly HEIGHT = 32;
 
   constructor(
     scene: Phaser.Scene,
@@ -34,22 +35,10 @@ export class Vehicle {
     this.scene = scene;
     this.playerId = playerId;
 
-    const color = playerId === 0 ? COLORS.PLAYER1 : COLORS.PLAYER2;
+    const textureKey = playerId === 0 ? 'vehicle-p1' : 'vehicle-p2';
 
-    // Visual representation — rectangle placeholder
-    this.sprite = scene.add.rectangle(x, y, Vehicle.WIDTH, Vehicle.HEIGHT, color);
-    this.sprite.setStrokeStyle(2, COLORS.DARK_WOOD);
-    this.sprite.setDepth(10);
-
-    // Direction indicator (front of vehicle)
-    const indicator = scene.add.rectangle(
-      Vehicle.WIDTH / 2 - 4, 0, 10, 8,
-      COLORS.COPPER,
-    );
-    indicator.setStrokeStyle(1, COLORS.DARK_WOOD);
-
-    // Matter.js physics body
-    this.body = scene.matter.add.gameObject(this.sprite, {
+    // Create Matter.js physics sprite with custom texture
+    this.sprite = scene.matter.add.sprite(x, y, textureKey, undefined, {
       shape: { type: 'rectangle', width: Vehicle.WIDTH, height: Vehicle.HEIGHT },
       mass: PHYSICS.VEHICLE_MASS,
       friction: PHYSICS.VEHICLE_FRICTION,
@@ -62,22 +51,37 @@ export class Vehicle {
         mask: CATEGORIES.WALL | CATEGORIES.VEHICLE | CATEGORIES.BALL | CATEGORIES.GEYSER,
       },
       label: `vehicle-p${playerId}`,
-    }).body as MatterJS.BodyType;
+    });
 
-    // Boost pressure bar
-    const barWidth = 50;
-    const barHeight = 6;
-    const barY = playerId === 0 ? 16 : 16;
-    const barX = playerId === 0 ? 80 : scene.scale.width - 80;
+    this.sprite.setDepth(10);
+    this.body = this.sprite.body as MatterJS.BodyType;
 
-    this.boostBarBg = scene.add.rectangle(barX, barY, barWidth, barHeight, 0x333333);
+    // Steam boost exhaust particle emitter
+    this.boostEmitter = scene.add.particles(0, 0, 'smoke-particle', {
+      speed: { min: 40, max: 120 },
+      scale: { start: 0.9, end: 0 },
+      alpha: { start: 0.7, end: 0 },
+      lifespan: 350,
+      emitting: false,
+      quantity: 3,
+    });
+    this.boostEmitter.setDepth(9);
+
+    // Boost pressure bar UI
+    const barWidth = 60;
+    const barHeight = 8;
+    const barY = 16;
+    const barX = playerId === 0 ? 90 : scene.scale.width - 90;
+
+    this.boostBarBg = scene.add.rectangle(barX, barY, barWidth, barHeight, 0x1f140e);
     this.boostBarBg.setStrokeStyle(1, COLORS.DARK_WOOD);
     this.boostBarBg.setDepth(100);
     this.boostBarBg.setScrollFactor(0);
 
     this.boostBarFill = scene.add.rectangle(
-      barX, barY, barWidth, barHeight, COLORS.BOOST_FULL,
+      barX - barWidth / 2, barY, barWidth, barHeight - 2, COLORS.BOOST_FULL,
     );
+    this.boostBarFill.setOrigin(0, 0.5);
     this.boostBarFill.setDepth(101);
     this.boostBarFill.setScrollFactor(0);
   }
@@ -89,10 +93,7 @@ export class Vehicle {
 
     // --- Drift mechanic ---
     if (input.drift) {
-      if (!this.isDrifting) {
-        this.isDrifting = true;
-      }
-      // Reduce air friction for slidey feel
+      this.isDrifting = true;
       (body as any).frictionAir = PHYSICS.DRIFT_FRICTION_AIR;
     } else {
       if (this.isDrifting) {
@@ -120,10 +121,8 @@ export class Vehicle {
     }
 
     // --- Steering ---
-    // Only steer when the vehicle is moving
     const speed = getSpeed(body.velocity.x, body.velocity.y);
     if (speed > 0.3) {
-      // Determine if moving forward or backward relative to facing
       const moveDot = dot(
         body.velocity.x, body.velocity.y,
         forward.x, forward.y,
@@ -131,7 +130,6 @@ export class Vehicle {
       const steerDirection = moveDot >= 0 ? 1 : -1;
 
       let turnRate = PHYSICS.VEHICLE_TURN_SPEED;
-      // Scale turn rate with speed (slower at low speed)
       turnRate *= clamp(speed / 3, 0.3, 1.0);
 
       if (input.turnLeft) {
@@ -139,14 +137,13 @@ export class Vehicle {
       } else if (input.turnRight) {
         this.scene.matter.body.setAngularVelocity(body, turnRate * steerDirection);
       } else {
-        // Dampen angular velocity when not steering
         this.scene.matter.body.setAngularVelocity(
           body,
           body.angularVelocity * (1 - PHYSICS.VEHICLE_ANGULAR_FRICTION),
         );
       }
     } else {
-      // Allow rotation in place at reduced speed
+      // Rotate in place slowly
       const turnRate = PHYSICS.VEHICLE_TURN_SPEED * 0.5;
       if (input.turnLeft) {
         this.scene.matter.body.setAngularVelocity(body, -turnRate);
@@ -155,7 +152,7 @@ export class Vehicle {
       }
     }
 
-    // --- Boost ---
+    // --- Boost of Steam ---
     if (input.boost && this.boostPressure > 0) {
       const boostForce = PHYSICS.BOOST_FORCE;
       this.scene.matter.body.applyForce(body, body.position, {
@@ -163,15 +160,20 @@ export class Vehicle {
         y: forward.y * boostForce,
       });
       this.boostPressure = Math.max(0, this.boostPressure - PHYSICS.BOOST_DRAIN_RATE);
+
+      // Emit exhaust steam behind the vehicle
+      const backOffset = 24;
+      const emitX = body.position.x - forward.x * backOffset;
+      const emitY = body.position.y - forward.y * backOffset;
+      this.boostEmitter.emitParticleAt(emitX, emitY, 2);
     } else {
-      // Passive regen
       this.boostPressure = Math.min(
         PHYSICS.BOOST_MAX,
         this.boostPressure + PHYSICS.BOOST_REGEN_RATE,
       );
     }
 
-    // --- Jump ---
+    // --- Piston Jump ---
     if (input.jump && !this.isJumping && this.jumpCooldownTimer <= 0) {
       this.performJump();
     }
@@ -188,7 +190,7 @@ export class Vehicle {
       });
     }
 
-    // --- Update boost bar ---
+    // --- Update UI bar ---
     this.updateBoostBar();
   }
 
@@ -196,7 +198,7 @@ export class Vehicle {
     this.isJumping = true;
     this.jumpCooldownTimer = PHYSICS.JUMP_COOLDOWN;
 
-    // Visual jump: scale up then back down
+    // Visual jump tween
     this.scene.tweens.add({
       targets: this.sprite,
       scaleX: PHYSICS.JUMP_SCALE,
@@ -210,7 +212,6 @@ export class Vehicle {
       },
     });
 
-    // Brief air friction reduction (floaty jump feel)
     const origFriction = PHYSICS.VEHICLE_FRICTION_AIR;
     (this.body as any).frictionAir = 0.005;
     this.scene.time.delayedCall(PHYSICS.JUMP_DURATION, () => {
@@ -222,10 +223,9 @@ export class Vehicle {
 
   private updateBoostBar(): void {
     const ratio = this.boostPressure / PHYSICS.BOOST_MAX;
-    const fullWidth = 50;
+    const fullWidth = 60;
     this.boostBarFill.width = fullWidth * ratio;
 
-    // Color: green when full, red when low
     if (ratio > 0.5) {
       this.boostBarFill.fillColor = COLORS.BOOST_FULL;
     } else if (ratio > 0.2) {
@@ -235,16 +235,10 @@ export class Vehicle {
     }
   }
 
-  /**
-   * Recharge boost (e.g., from a steam geyser)
-   */
   rechargeBoost(amount: number): void {
     this.boostPressure = Math.min(PHYSICS.BOOST_MAX, this.boostPressure + amount);
   }
 
-  /**
-   * Reset vehicle to a position (after goal)
-   */
   resetTo(x: number, y: number, angle: number): void {
     this.scene.matter.body.setPosition(this.body, { x, y });
     this.scene.matter.body.setVelocity(this.body, { x: 0, y: 0 });
