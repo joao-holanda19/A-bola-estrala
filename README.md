@@ -166,3 +166,6 @@ Este projeto é distribuído sob a licença MIT. Veja o arquivo [LICENSE](LICENS
 **A Bola Estrala © 2026**
 
 </div>
+
+LINK DO PROJETO:
+https://vercel.com/joao-pedro-goncalves-holandas-projects/a-bola-estrala/5skRdhhFecRCjbwbLoduUJRdgENd
