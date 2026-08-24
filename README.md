@@ -168,4 +168,4 @@ Este projeto é distribuído sob a licença MIT. Veja o arquivo [LICENSE](LICENS
 </div>
 
 LINK DO PROJETO:
-https://vercel.com/joao-pedro-goncalves-holandas-projects/a-bola-estrala/5skRdhhFecRCjbwbLoduUJRdgENd
+https://a-bola-estrala.vercel.app/
